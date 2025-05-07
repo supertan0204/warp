@@ -709,4 +709,75 @@ inline CUDA_CALLABLE void adj_eig3(const mat_t<3,3,Type>& A, const mat_t<3,3,Typ
     mat_t<3,3,Type> QT = transpose(Q);
     adj_A = adj_A + mul(Q, mul(D_bar + cw_mul(F, mul(QT, adj_Q)), QT));
 }
+// Below are implementation from Xiyang to cover higher dimensional svd.
+
+// Givens rotation for a square matrix
+template<unsigned Size, typename Type>
+inline CUDA_CALLABLE void rotate(mat_t<Size, Size, Type>&H, int i, int j,  bool&pass, mat_t<Size, Size, Type>&J) {
+    Type ele = H.data[i][j];
+    if (fabs(ele) < _svd_config<Type>::QR_GIVENS_EPSILON) {
+        return;
+    }
+    pass = false;
+    Type ele1 = H.data[i][i];
+    Type ele2 = H.data[j][j];
+    Type tau = (ele1 - ele2) / (2 * ele);
+    Type signed_tau = tau > 0 ? Type(1) : Type(-1);
+    Type t = signed_tau / (fabs(tau) + sqrt(1 + pow(tau, 2)));
+    Type c = Type(1) / sqrt(1 + pow(t, 2));
+    Type s = c * t;
+    mat_t<Size, Size, Type> G = identity<Size, Size, Type>(); 
+    // assign the Givens matrix
+    G.data[i][i] = c;
+    G.data[i][j] = Type(-1) * s;
+    G.data[j][i] = s;
+    G.data[j][j] = c;
+
+    // apply rotation
+    H = transpose(G) * H * G;
+    J = J * G;
+}
+
+template<unsigned Size, typename Type>
+inline CUDA_CALLABLE void jacobi(mat_t<Size, Size, Type>&H, mat_t<Size, Size, Type>&J, vec_t<Size, Type>&S) {
+    int size = Size;
+    int iteration = _svd_config<Type>::JACOBI_ITERATIONS;
+    float threshold = _svd_config<Type>::JACOBI_THRESHOLD;
+    while (iteration-- > 0) {
+        bool pass = true;
+        for (int i = 0; i < size; i++){
+            for (int j = i + 1; j < size; j++){
+                rotate(H, i, j, pass, J);
+            }
+        }
+        if (pass) 
+            break;
+    }
+    for (int i = 0; i < size; i++) {
+        S.c[i] = H.data[i][i];
+        if (S.c[i] < threshold) {
+            S.c[i] = Type(0);
+        }
+    }
+}
+
+template<unsigned Rows, unsigned Cols, typename Type> 
+inline CUDA_CALLABLE void svd_mn(mat_t<Rows, Cols, Type>&A, mat_t<Rows, Rows, Type>&U, vec_t<Cols, Type>&E, mat_t<Cols, Cols, Type>&V) {
+    int rows = Rows;
+    int cols = Cols;
+    assert(rows <= cols); // make sure we handle matrix that has more columns than rows
+    // 1. Obtain A^TA
+    mat_t<Cols, Cols, Type> H = transpose(A) * A;
+
+    // 2. Apply Jacobi method to H
+    mat_t<Cols, Cols, Type> J = identity<Cols, Cols, Type>();
+    vec_t<Cols, Type> S;
+    jacobi(H, J, S);
+    for (int i = 0; i < cols; i++) {
+        S.c[i] = sqrt(S.c[i]);
+    }
+
+    // 3. Sort singular values
+   
+}
 }
